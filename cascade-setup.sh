@@ -141,6 +141,95 @@ fatal_error() {
 }
 
 ################################################################################
+# HELPER FUNCTIONS
+################################################################################
+
+# Find xray binary
+find_xray_binary() {
+    local xray_paths=(
+        "/usr/local/x-ui/bin/xray-linux-amd64"
+        "/usr/local/x-ui/xray"
+        "/usr/bin/xray"
+        "/usr/local/bin/xray"
+        "$(which xray 2>/dev/null)"
+    )
+
+    for path in "${xray_paths[@]}"; do
+        if [ -n "$path" ] && [ -x "$path" ]; then
+            echo "$path"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# Generate Reality keys
+generate_reality_keys() {
+    local public_var="$1"
+    local private_var="$2"
+
+    print_info "Generating Reality key pair..."
+
+    # Try to find xray binary
+    local xray_bin=$(find_xray_binary)
+
+    if [ -n "$xray_bin" ]; then
+        print_info "Found xray at: ${xray_bin}"
+
+        # Try to generate keys with timeout
+        local keys_output=$(timeout 5 "$xray_bin" x25519 2>/dev/null || echo "")
+
+        if [ -n "$keys_output" ]; then
+            local priv_key=$(echo "$keys_output" | grep "Private key:" | awk '{print $3}')
+            local pub_key=$(echo "$keys_output" | grep "Public key:" | awk '{print $3}')
+
+            if [ -n "$priv_key" ] && [ -n "$pub_key" ]; then
+                eval "$private_var='$priv_key'"
+                eval "$public_var='$pub_key'"
+                print_success "Keys generated successfully"
+                return 0
+            fi
+        fi
+    fi
+
+    # Fallback: try x-ui command
+    print_info "Trying alternative method (x-ui command)..."
+    local keys_output=$(timeout 5 x-ui x25519 2>/dev/null || echo "")
+
+    if [ -n "$keys_output" ]; then
+        local priv_key=$(echo "$keys_output" | grep "Private key:" | awk '{print $3}')
+        local pub_key=$(echo "$keys_output" | grep "Public key:" | awk '{print $3}')
+
+        if [ -n "$priv_key" ] && [ -n "$pub_key" ]; then
+            eval "$private_var='$priv_key'"
+            eval "$public_var='$pub_key'"
+            print_success "Keys generated successfully"
+            return 0
+        fi
+    fi
+
+    # If all methods failed, ask user to provide keys manually
+    print_warning "Could not auto-generate keys. Please provide them manually."
+    echo ""
+    echo "You can generate keys using one of these methods:"
+    echo "  1. On another server with xray: xray x25519"
+    echo "  2. Using x-ui command: x-ui"
+    echo "  3. Online generator: https://github.com/XTLS/Xray-core"
+    echo ""
+
+    local temp_pub temp_priv
+    ask_input "Public Key" "temp_pub"
+    ask_input "Private Key" "temp_priv" false true
+
+    eval "$public_var='$temp_pub'"
+    eval "$private_var='$temp_priv'"
+
+    print_success "Keys provided manually"
+    return 0
+}
+
+################################################################################
 # USER INTERACTION
 ################################################################################
 
@@ -533,19 +622,8 @@ configure_non_ru_server() {
     ask_input "SNI (Server Name Indication, e.g., www.google.com)" "EXIT_SNI"
     ask_input "Server Name for Reality (e.g., www.google.com)" "EXIT_SERVER_NAME"
 
-    print_info "Generating Reality key pair..."
-    # Generate keys using xray
-    local keys_output=$(/usr/local/x-ui/bin/xray-linux-amd64 x25519 2>/dev/null || echo "")
-
-    if [ -n "$keys_output" ]; then
-        EXIT_PRIVATE_KEY=$(echo "$keys_output" | grep "Private key:" | awk '{print $3}')
-        EXIT_PUBLIC_KEY=$(echo "$keys_output" | grep "Public key:" | awk '{print $3}')
-        print_success "Keys generated successfully"
-    else
-        print_warning "Could not auto-generate keys, please provide them manually"
-        ask_input "Public Key" "EXIT_PUBLIC_KEY"
-        ask_input "Private Key" "EXIT_PRIVATE_KEY"
-    fi
+    # Generate Reality keys using helper function
+    generate_reality_keys "EXIT_PUBLIC_KEY" "EXIT_PRIVATE_KEY"
 
     # Generate short ID
     EXIT_SHORT_ID=$(openssl rand -hex 8)
@@ -739,18 +817,8 @@ configure_client_inbound() {
     ask_input "SNI for clients (recommended: apple.com, microsoft.com)" "CLIENT_SNI"
     ask_input "Server Name for Reality" "CLIENT_SERVER_NAME"
 
-    print_info "Generating Reality key pair..."
-    local keys_output=$(/usr/local/x-ui/bin/xray-linux-amd64 x25519 2>/dev/null || echo "")
-
-    if [ -n "$keys_output" ]; then
-        CLIENT_PRIVATE_KEY=$(echo "$keys_output" | grep "Private key:" | awk '{print $3}')
-        CLIENT_PUBLIC_KEY=$(echo "$keys_output" | grep "Public key:" | awk '{print $3}')
-        print_success "Keys generated successfully"
-    else
-        print_warning "Could not auto-generate keys, please provide them manually"
-        ask_input "Public Key" "CLIENT_PUBLIC_KEY"
-        ask_input "Private Key" "CLIENT_PRIVATE_KEY"
-    fi
+    # Generate Reality keys using helper function
+    generate_reality_keys "CLIENT_PUBLIC_KEY" "CLIENT_PRIVATE_KEY"
 
     # Generate short ID
     CLIENT_SHORT_ID=$(openssl rand -hex 8)
