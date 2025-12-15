@@ -530,38 +530,80 @@ select_server_role() {
 install_3xui() {
     print_step "6" "Installing 3x-ui Panel"
 
+    log_message "INFO" "Checking for existing 3x-ui installation..."
+
     # Check if already installed
     if [ -f "/usr/local/x-ui/bin/xray-linux-amd64" ] || [ -f "/usr/local/x-ui/x-ui" ]; then
-        print_warning "3x-ui appears to be already installed"
-        if ask_yes_no "Do you want to reinstall 3x-ui?" "n"; then
-            print_info "Reinstalling 3x-ui..."
+        log_message "INFO" "3x-ui is already installed, using existing installation"
+        print_success "3x-ui is already installed"
+        print_info "Using existing 3x-ui installation"
+
+        # Check if service is running
+        if systemctl is-active --quiet x-ui; then
+            log_message "INFO" "3x-ui service is already running"
+            print_success "3x-ui service is running"
         else
-            print_info "Skipping 3x-ui installation"
-            return 0
+            log_message "WARNING" "3x-ui service is not running, attempting to start..."
+            print_warning "3x-ui service is not running, attempting to start..."
+            if systemctl start x-ui; then
+                log_message "SUCCESS" "3x-ui service started"
+                print_success "3x-ui service started"
+                sleep 3
+            else
+                log_message "ERROR" "Failed to start 3x-ui service"
+                fatal_error "Failed to start 3x-ui service"
+            fi
         fi
+
+        # Ensure service is enabled on boot
+        systemctl enable x-ui &>/dev/null || log_message "WARNING" "Could not enable x-ui on boot"
+
+        log_message "INFO" "Proceeding with existing 3x-ui installation"
+        print_info "Proceeding with configuration..."
+        return 0
     fi
 
+    # 3x-ui not installed, install it
+    log_message "INFO" "3x-ui not found, proceeding with installation"
     print_info "Downloading and installing 3x-ui from official repository..."
     print_info "Repository: ${XRAY_UI_REPO}"
 
     # Download and execute install script
-    bash <(curl -Ls "${XRAY_UI_REPO}") || fatal_error "Failed to install 3x-ui"
+    if bash <(curl -Ls "${XRAY_UI_REPO}"); then
+        log_message "SUCCESS" "3x-ui installation script completed"
+    else
+        log_message "ERROR" "3x-ui installation failed"
+        fatal_error "Failed to install 3x-ui"
+    fi
 
     # Wait for service to start
     sleep 5
 
     # Check if service is running
     if systemctl is-active --quiet x-ui; then
+        log_message "SUCCESS" "3x-ui service is running"
         print_success "3x-ui service is running"
     else
+        log_message "WARNING" "3x-ui service is not running, attempting to start..."
         print_warning "3x-ui service is not running, attempting to start..."
-        systemctl start x-ui || fatal_error "Failed to start 3x-ui service"
-        sleep 3
+        if systemctl start x-ui; then
+            log_message "SUCCESS" "3x-ui service started"
+            sleep 3
+        else
+            log_message "ERROR" "Failed to start 3x-ui service"
+            fatal_error "Failed to start 3x-ui service"
+        fi
     fi
 
     # Enable service on boot
-    systemctl enable x-ui || print_warning "Could not enable x-ui service on boot"
+    if systemctl enable x-ui; then
+        log_message "SUCCESS" "3x-ui enabled on boot"
+    else
+        log_message "WARNING" "Could not enable x-ui service on boot"
+        print_warning "Could not enable x-ui service on boot"
+    fi
 
+    log_message "SUCCESS" "3x-ui installed successfully"
     print_success "3x-ui installed successfully"
 }
 
