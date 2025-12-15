@@ -169,47 +169,77 @@ generate_reality_keys() {
     local public_var="$1"
     local private_var="$2"
 
+    log_message "INFO" "=== Starting Reality key generation ==="
+    log_message "INFO" "Target variables: public=${public_var}, private=${private_var}"
     print_info "Generating Reality key pair..."
 
     # Try to find xray binary
+    log_message "INFO" "Searching for xray binary..."
     local xray_bin=$(find_xray_binary)
 
     if [ -n "$xray_bin" ]; then
+        log_message "INFO" "Found xray binary: ${xray_bin}"
         print_info "Found xray at: ${xray_bin}"
 
         # Try to generate keys with timeout
-        local keys_output=$(timeout 5 "$xray_bin" x25519 2>/dev/null || echo "")
+        log_message "INFO" "Executing: timeout 5 ${xray_bin} x25519"
+        local keys_output=$(timeout 5 "$xray_bin" x25519 2>&1 || echo "")
+        log_message "INFO" "xray x25519 output length: ${#keys_output} chars"
+        log_message "INFO" "xray x25519 output (first 100 chars): ${keys_output:0:100}"
 
         if [ -n "$keys_output" ]; then
             local priv_key=$(echo "$keys_output" | grep "Private key:" | awk '{print $3}')
             local pub_key=$(echo "$keys_output" | grep "Public key:" | awk '{print $3}')
 
+            log_message "INFO" "Extracted private key length: ${#priv_key}"
+            log_message "INFO" "Extracted public key length: ${#pub_key}"
+
             if [ -n "$priv_key" ] && [ -n "$pub_key" ]; then
                 eval "$private_var='$priv_key'"
                 eval "$public_var='$pub_key'"
+                log_message "SUCCESS" "Keys generated via xray binary successfully"
+                log_message "INFO" "Public key (first 20 chars): ${pub_key:0:20}..."
                 print_success "Keys generated successfully"
                 return 0
+            else
+                log_message "WARNING" "Failed to extract keys from xray output"
             fi
+        else
+            log_message "WARNING" "xray x25519 returned empty output"
         fi
+    else
+        log_message "WARNING" "xray binary not found in any standard location"
     fi
 
     # Fallback: try x-ui command
+    log_message "INFO" "Attempting fallback method: x-ui command"
     print_info "Trying alternative method (x-ui command)..."
-    local keys_output=$(timeout 5 x-ui x25519 2>/dev/null || echo "")
+    local keys_output=$(timeout 5 x-ui x25519 2>&1 || echo "")
+    log_message "INFO" "x-ui x25519 output length: ${#keys_output} chars"
 
     if [ -n "$keys_output" ]; then
         local priv_key=$(echo "$keys_output" | grep "Private key:" | awk '{print $3}')
         local pub_key=$(echo "$keys_output" | grep "Public key:" | awk '{print $3}')
 
+        log_message "INFO" "Extracted private key length from x-ui: ${#priv_key}"
+        log_message "INFO" "Extracted public key length from x-ui: ${#pub_key}"
+
         if [ -n "$priv_key" ] && [ -n "$pub_key" ]; then
             eval "$private_var='$priv_key'"
             eval "$public_var='$pub_key'"
+            log_message "SUCCESS" "Keys generated via x-ui command successfully"
             print_success "Keys generated successfully"
             return 0
+        else
+            log_message "WARNING" "Failed to extract keys from x-ui output"
         fi
+    else
+        log_message "WARNING" "x-ui x25519 returned empty output"
     fi
 
     # If all methods failed, ask user to provide keys manually
+    log_message "WARNING" "All automatic key generation methods failed"
+    log_message "INFO" "Requesting manual key input from user"
     print_warning "Could not auto-generate keys. Please provide them manually."
     echo ""
     echo "You can generate keys using one of these methods:"
@@ -217,14 +247,23 @@ generate_reality_keys() {
     echo "  2. Using x-ui command: x-ui"
     echo "  3. Online generator: https://github.com/XTLS/Xray-core"
     echo ""
+    echo "Example of valid keys:"
+    echo "  Private key: SInS6Wz7VKlQtUJ-dBFKqQ3BoFaF8tHj5D0lF8kA91k"
+    echo "  Public key:  kL9nM4pQ2rT5vW8zA1bC3dE6fG9hJ0kL2mN5pQ8rT1v"
+    echo ""
 
     local temp_pub temp_priv
     ask_input "Public Key" "temp_pub"
     ask_input "Private Key" "temp_priv" false true
 
+    log_message "INFO" "User provided public key length: ${#temp_pub}"
+    log_message "INFO" "User provided private key length: ${#temp_priv}"
+    log_message "INFO" "Public key (first 20 chars): ${temp_pub:0:20}..."
+
     eval "$public_var='$temp_pub'"
     eval "$private_var='$temp_priv'"
 
+    log_message "SUCCESS" "Keys provided manually and saved"
     print_success "Keys provided manually"
     return 0
 }
@@ -526,70 +565,137 @@ install_3xui() {
     print_success "3x-ui installed successfully"
 }
 
+# Get actual 3x-ui panel settings
+get_xui_panel_settings() {
+    log_message "INFO" "Reading actual 3x-ui panel settings..."
+
+    # Try to get settings from x-ui
+    if command -v x-ui &> /dev/null; then
+        # Get current settings using x-ui show command
+        local settings_output=$(x-ui 2>&1)
+        log_message "INFO" "x-ui command output: ${settings_output:0:200}"
+
+        # Try to extract port from config or use default
+        if [ -f "/etc/x-ui/x-ui.db" ]; then
+            # x-ui stores settings in SQLite database
+            # Default port is usually 54321 or 2053
+            log_message "INFO" "Found x-ui database at /etc/x-ui/x-ui.db"
+            PANEL_PORT="54321"  # x-ui default
+        else
+            log_message "WARNING" "x-ui database not found, using default port"
+            PANEL_PORT="2053"
+        fi
+    else
+        log_message "WARNING" "x-ui command not found"
+        PANEL_PORT="2053"
+    fi
+
+    # Default x-ui credentials (from installation)
+    PANEL_USERNAME="admin"
+    PANEL_PASSWORD="admin"
+
+    log_message "INFO" "Panel settings - Port: ${PANEL_PORT}, Username: ${PANEL_USERNAME}"
+}
+
 # Configure 3x-ui panel settings
 configure_3xui_panel() {
-    print_step "7" "Configuring 3x-ui Panel Access"
+    print_step "7" "Reading 3x-ui Panel Configuration"
 
-    print_info "Setting up panel credentials..."
+    log_message "INFO" "Starting panel configuration check..."
+    print_info "Detecting 3x-ui panel settings..."
 
-    # Generate random username and password if not set
-    if [ -z "$PANEL_USERNAME" ]; then
-        PANEL_USERNAME="admin-$(openssl rand -hex 4)"
-    fi
+    # Get actual panel settings from x-ui installation
+    get_xui_panel_settings
 
-    if [ -z "$PANEL_PASSWORD" ]; then
-        PANEL_PASSWORD="$(openssl rand -base64 16)"
-    fi
+    log_message "INFO" "Detected panel port: ${PANEL_PORT}"
+    log_message "INFO" "Default credentials will be used: ${PANEL_USERNAME}/admin"
 
-    # Ask user for custom credentials
     echo ""
-    print_info "Default panel port: ${PANEL_PORT}"
-    print_info "Generated username: ${PANEL_USERNAME}"
-    print_info "Generated password: ${PANEL_PASSWORD}"
+    print_info "3x-ui panel is configured with DEFAULT settings:"
+    print_info "  Port: ${PANEL_PORT}"
+    print_info "  Username: ${PANEL_USERNAME}"
+    print_info "  Password: ${PANEL_PASSWORD}"
     echo ""
 
-    if ask_yes_no "Do you want to customize panel access settings?" "n"; then
-        ask_input "Panel port" "PANEL_PORT" false
-        ask_input "Panel username" "PANEL_USERNAME" false
-        ask_input "Panel password" "PANEL_PASSWORD" false true
+    print_warning "IMPORTANT: These are the DEFAULT credentials set by x-ui installer."
+    print_warning "You should change them after first login for security!"
+    echo ""
+
+    # Ask if user wants to change settings now
+    if ask_yes_no "Do you want to change panel settings now (port/username/password)?" "n"; then
+        log_message "INFO" "User chose to customize panel settings"
+
+        local new_port new_user new_pass
+        ask_input "New panel port (current: ${PANEL_PORT})" "new_port" true
+        ask_input "New panel username (current: ${PANEL_USERNAME})" "new_user" true
+        ask_input "New panel password (current: ${PANEL_PASSWORD})" "new_pass" true true
+
+        # Apply changes if provided
+        if [ -n "$new_port" ] || [ -n "$new_user" ] || [ -n "$new_pass" ]; then
+            print_info "Applying panel configuration changes..."
+            log_message "INFO" "Applying custom settings: port=${new_port:-$PANEL_PORT} user=${new_user:-$PANEL_USERNAME}"
+
+            # Use x-ui command to change settings
+            local change_cmd="x-ui"
+            [ -n "$new_user" ] && change_cmd+=" -username ${new_user}" && PANEL_USERNAME="$new_user"
+            [ -n "$new_pass" ] && change_cmd+=" -password ${new_pass}" && PANEL_PASSWORD="$new_pass"
+            [ -n "$new_port" ] && change_cmd+=" -port ${new_port}" && PANEL_PORT="$new_port"
+
+            log_message "INFO" "Executing: x-ui with custom parameters"
+
+            if eval "$change_cmd" &>> "$LOG_FILE"; then
+                print_success "Panel settings updated successfully"
+                log_message "SUCCESS" "Panel settings applied"
+
+                # Restart x-ui to apply changes
+                print_info "Restarting x-ui service..."
+                systemctl restart x-ui
+                sleep 3
+            else
+                print_warning "Could not apply settings automatically. You can change them in web panel."
+                log_message "WARNING" "Failed to apply panel settings via command"
+            fi
+        else
+            print_info "No changes requested, keeping default settings"
+            log_message "INFO" "User kept default panel settings"
+        fi
+    else
+        print_info "Keeping default panel settings"
+        log_message "INFO" "User chose to keep default settings"
     fi
 
-    print_info "Applying panel configuration..."
-
-    # Configure via x-ui command if available
-    if command -v x-ui &> /dev/null; then
-        # Try to set settings via command line
-        # Note: This depends on 3x-ui CLI interface
-        print_info "Panel access will be configured via web interface"
-    fi
-
-    print_success "Panel configuration prepared"
+    print_success "Panel configuration complete"
     echo ""
     echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}  3x-ui Panel Access:${NC}"
+    echo -e "${GREEN}  3x-ui Panel Access Information:${NC}"
+    echo -e "${GREEN}  ─────────────────────────────────────────────────────────────${NC}"
     echo -e "${GREEN}  URL:      http://${SERVER_IP}:${PANEL_PORT}${NC}"
     echo -e "${GREEN}  Username: ${PANEL_USERNAME}${NC}"
     echo -e "${GREEN}  Password: ${PANEL_PASSWORD}${NC}"
     echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
 
-    log_message "INFO" "Panel URL: http://${SERVER_IP}:${PANEL_PORT}"
-    log_message "INFO" "Panel username: ${PANEL_USERNAME}"
+    log_message "INFO" "Final panel URL: http://${SERVER_IP}:${PANEL_PORT}"
+    log_message "INFO" "Final panel username: ${PANEL_USERNAME}"
 
     # Save credentials to file
     cat > /root/3xui-credentials.txt <<EOF
-3x-ui Panel Credentials
-=======================
+3x-ui Panel Access Information
+===============================
 URL:      http://${SERVER_IP}:${PANEL_PORT}
 Username: ${PANEL_USERNAME}
 Password: ${PANEL_PASSWORD}
 
+IMPORTANT: Change default credentials after first login!
+
 Generated at: $(date)
 Server Role: ${SERVER_ROLE}
+Server IP: ${SERVER_IP}
 EOF
 
     chmod 600 /root/3xui-credentials.txt
-    print_info "Credentials saved to: /root/3xui-credentials.txt"
+    print_info "Panel info saved to: /root/3xui-credentials.txt"
+    log_message "INFO" "Credentials saved to /root/3xui-credentials.txt"
 }
 
 ################################################################################
@@ -597,17 +703,23 @@ EOF
 ################################################################################
 
 configure_non_ru_server() {
+    log_message "INFO" "=== Starting NON-RU Server Configuration ==="
     print_step "8" "Configuring NON-RU Server (Exit Node)"
+
+    log_message "INFO" "Server IP: ${SERVER_IP}"
+    log_message "INFO" "Default exit port: ${EXIT_PORT}"
 
     print_info "This server will act as the exit node for all traffic."
     print_info "It will receive connections from the RU server and provide internet access."
     echo ""
 
     # Generate inbound configuration for RU server connection
+    log_message "INFO" "Generating VLESS Reality inbound configuration..."
     print_info "Generating VLESS Reality configuration for RU server connection..."
 
     # Generate UUID
     EXIT_UUID=$(cat /proc/sys/kernel/random/uuid)
+    log_message "INFO" "Generated EXIT_UUID: ${EXIT_UUID}"
     print_success "Generated UUID: ${EXIT_UUID}"
 
     # Ask for Reality settings
@@ -618,15 +730,23 @@ configure_non_ru_server() {
 
     ask_input "Inbound port for RU server (default: ${EXIT_PORT})" "temp_port" true
     [ -n "$temp_port" ] && EXIT_PORT="$temp_port"
+    log_message "INFO" "Exit port set to: ${EXIT_PORT}"
 
     ask_input "SNI (Server Name Indication, e.g., www.google.com)" "EXIT_SNI"
+    log_message "INFO" "EXIT_SNI set to: ${EXIT_SNI}"
+
     ask_input "Server Name for Reality (e.g., www.google.com)" "EXIT_SERVER_NAME"
+    log_message "INFO" "EXIT_SERVER_NAME set to: ${EXIT_SERVER_NAME}"
 
     # Generate Reality keys using helper function
+    log_message "INFO" "Calling generate_reality_keys for EXIT keys..."
     generate_reality_keys "EXIT_PUBLIC_KEY" "EXIT_PRIVATE_KEY"
+    log_message "INFO" "EXIT_PUBLIC_KEY length: ${#EXIT_PUBLIC_KEY}"
+    log_message "INFO" "EXIT_PRIVATE_KEY length: ${#EXIT_PRIVATE_KEY}"
 
     # Generate short ID
     EXIT_SHORT_ID=$(openssl rand -hex 8)
+    log_message "INFO" "Generated EXIT_SHORT_ID: ${EXIT_SHORT_ID}"
     print_success "Generated Short ID: ${EXIT_SHORT_ID}"
 
     # Spider X (optional)
@@ -664,39 +784,87 @@ configure_non_ru_server() {
 }
 
 configure_firewall_non_ru() {
+    log_message "INFO" "=== Configuring firewall for NON-RU exit node ==="
     print_info "Configuring firewall for exit node..."
 
     # Allow SSH
-    ufw allow 22/tcp comment 'SSH' || true
+    log_message "INFO" "Adding UFW rule: allow 22/tcp (SSH)"
+    if ufw allow 22/tcp comment 'SSH' 2>&1 | tee -a "$LOG_FILE"; then
+        log_message "SUCCESS" "SSH port 22 allowed"
+    else
+        log_message "WARNING" "Failed to add UFW rule for SSH"
+    fi
 
     # Allow panel port
-    ufw allow "${PANEL_PORT}/tcp" comment '3x-ui Panel' || true
+    log_message "INFO" "Adding UFW rule: allow ${PANEL_PORT}/tcp (3x-ui Panel)"
+    if ufw allow "${PANEL_PORT}/tcp" comment '3x-ui Panel' 2>&1 | tee -a "$LOG_FILE"; then
+        log_message "SUCCESS" "Panel port ${PANEL_PORT} allowed"
+    else
+        log_message "WARNING" "Failed to add UFW rule for panel port"
+    fi
 
     # Allow exit port
-    ufw allow "${EXIT_PORT}/tcp" comment 'VLESS Reality Exit' || true
+    log_message "INFO" "Adding UFW rule: allow ${EXIT_PORT}/tcp (VLESS Reality Exit)"
+    if ufw allow "${EXIT_PORT}/tcp" comment 'VLESS Reality Exit' 2>&1 | tee -a "$LOG_FILE"; then
+        log_message "SUCCESS" "Exit port ${EXIT_PORT} allowed"
+    else
+        log_message "WARNING" "Failed to add UFW rule for exit port"
+    fi
 
     # Enable NAT
+    log_message "INFO" "Configuring NAT for internet access..."
     print_info "Configuring NAT for internet access..."
 
     # Get default interface
+    log_message "INFO" "Detecting default network interface..."
     local default_iface=$(ip route | grep default | awk '{print $5}' | head -n1)
+    log_message "INFO" "ip route output: $(ip route | grep default)"
 
     if [ -z "$default_iface" ]; then
+        log_message "WARNING" "Could not detect default network interface, using eth0"
         print_warning "Could not detect default network interface"
         default_iface="eth0"
     fi
 
+    log_message "INFO" "Using network interface: ${default_iface}"
     print_info "Default interface: ${default_iface}"
 
     # Configure iptables NAT
-    iptables -t nat -A POSTROUTING -o "$default_iface" -j MASQUERADE || print_warning "Could not configure NAT"
+    log_message "INFO" "Adding iptables MASQUERADE rule for ${default_iface}"
+    if iptables -t nat -A POSTROUTING -o "$default_iface" -j MASQUERADE 2>&1 | tee -a "$LOG_FILE"; then
+        log_message "SUCCESS" "NAT MASQUERADE rule added"
+    else
+        log_message "ERROR" "Failed to add iptables NAT rule"
+        print_warning "Could not configure NAT"
+    fi
+
+    # List current NAT rules for verification
+    log_message "INFO" "Current NAT rules:"
+    iptables -t nat -L POSTROUTING -v -n | tee -a "$LOG_FILE"
 
     # Save iptables rules
-    netfilter-persistent save || print_warning "Could not save iptables rules"
+    log_message "INFO" "Saving iptables rules with netfilter-persistent..."
+    if netfilter-persistent save 2>&1 | tee -a "$LOG_FILE"; then
+        log_message "SUCCESS" "iptables rules saved"
+    else
+        log_message "WARNING" "Could not save iptables rules"
+        print_warning "Could not save iptables rules"
+    fi
 
     # Enable UFW
-    echo "y" | ufw enable || print_warning "Could not enable UFW"
+    log_message "INFO" "Enabling UFW firewall..."
+    if echo "y" | ufw enable 2>&1 | tee -a "$LOG_FILE"; then
+        log_message "SUCCESS" "UFW enabled"
+    else
+        log_message "WARNING" "Could not enable UFW"
+        print_warning "Could not enable UFW"
+    fi
 
+    # Show UFW status
+    log_message "INFO" "Final UFW status:"
+    ufw status verbose | tee -a "$LOG_FILE"
+
+    log_message "SUCCESS" "Firewall configuration completed"
     print_success "Firewall configured"
 }
 
