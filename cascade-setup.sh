@@ -569,32 +569,51 @@ install_3xui() {
 get_xui_panel_settings() {
     log_message "INFO" "Reading actual 3x-ui panel settings..."
 
-    # Try to get settings from x-ui
-    if command -v x-ui &> /dev/null; then
-        # Get current settings using x-ui show command
-        local settings_output=$(x-ui 2>&1)
-        log_message "INFO" "x-ui command output: ${settings_output:0:200}"
+    # Check if x-ui database exists
+    if [ -f "/etc/x-ui/x-ui.db" ]; then
+        log_message "INFO" "Found x-ui database at /etc/x-ui/x-ui.db"
 
-        # Try to extract port from config or use default
-        if [ -f "/etc/x-ui/x-ui.db" ]; then
-            # x-ui stores settings in SQLite database
-            # Default port is usually 54321 or 2053
-            log_message "INFO" "Found x-ui database at /etc/x-ui/x-ui.db"
-            PANEL_PORT="54321"  # x-ui default
+        # Try to read settings from database if sqlite3 is available
+        if command -v sqlite3 &> /dev/null; then
+            log_message "INFO" "Attempting to read panel settings from database..."
+
+            # Try to get port from database
+            local db_port=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='webPort';" 2>/dev/null || echo "")
+            if [ -n "$db_port" ]; then
+                PANEL_PORT="$db_port"
+                log_message "INFO" "Read panel port from database: ${PANEL_PORT}"
+            else
+                PANEL_PORT="54321"  # x-ui default
+                log_message "INFO" "Could not read port from DB, using default: ${PANEL_PORT}"
+            fi
+
+            # Try to get username from database
+            local db_user=$(sqlite3 /etc/x-ui/x-ui.db "SELECT value FROM settings WHERE key='webUser';" 2>/dev/null || echo "")
+            if [ -n "$db_user" ]; then
+                PANEL_USERNAME="$db_user"
+                log_message "INFO" "Read panel username from database: ${PANEL_USERNAME}"
+            else
+                PANEL_USERNAME="admin"
+                log_message "INFO" "Could not read username from DB, using default: admin"
+            fi
+
+            # Note: Password is hashed in DB, so we can't get the plain text
+            PANEL_PASSWORD="admin"
+            log_message "INFO" "Using default password: admin (cannot read from DB - it's hashed)"
         else
-            log_message "WARNING" "x-ui database not found, using default port"
-            PANEL_PORT="2053"
+            log_message "INFO" "sqlite3 not available, using default settings"
+            PANEL_PORT="54321"  # x-ui default
+            PANEL_USERNAME="admin"
+            PANEL_PASSWORD="admin"
         fi
     else
-        log_message "WARNING" "x-ui command not found"
+        log_message "WARNING" "x-ui database not found at /etc/x-ui/x-ui.db, using defaults"
         PANEL_PORT="2053"
+        PANEL_USERNAME="admin"
+        PANEL_PASSWORD="admin"
     fi
 
-    # Default x-ui credentials (from installation)
-    PANEL_USERNAME="admin"
-    PANEL_PASSWORD="admin"
-
-    log_message "INFO" "Panel settings - Port: ${PANEL_PORT}, Username: ${PANEL_USERNAME}"
+    log_message "INFO" "Final panel settings - Port: ${PANEL_PORT}, Username: ${PANEL_USERNAME}"
 }
 
 # Configure 3x-ui panel settings
